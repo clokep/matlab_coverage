@@ -11,6 +11,12 @@ classdef FileCoverage < handle
         isMex = false;
     end
     
+    properties (Constant = true, GetAccess = protected)
+        % Regular expression to find non-code lines.
+        NON_CODE_EXPRESSION = '^\s*(.*)\s*?%.*$';
+        CODE_EXPRESSION = '^end[.;]?';
+    end
+    
     methods
         function this = FileCoverage(info)
         % Accepts the output of profile('info') for an individual
@@ -65,7 +71,15 @@ classdef FileCoverage < handle
                         fprintf('===== Uncovered lines ======\n')
                         uncoveredLines = find(~coveredLines);
                         for jt=1:length(uncoveredLines)
-                            dbtype(this.filename, num2str(uncoveredLines(jt)));
+                            try
+                                dbtype(this.filename, num2str(uncoveredLines(jt)));
+                            catch ex
+                                if (strcmp(ex.identifier, 'MATLAB:dbtype:dbLineBeyondEnd'))
+                                    ex
+                                else
+                                    rethrow(ex);
+                                end
+                            end
                             % Get rid of the extra lines that are added.
                             fprintf('\b\b');
                         end
@@ -82,7 +96,8 @@ classdef FileCoverage < handle
         function lines = coveredLines(this)
             if (~all(size(this.executedLines) == size(this.nonCodeLines)))
                 % We'd expect this to happen if a file no longer exists on
-                % the file system, so just use the info we have.
+                % the file system or was modified, so just use the info we
+                % have.
                 lines = this.executedLines;
             else
                 lines = this.executedLines | this.nonCodeLines;
@@ -92,6 +107,7 @@ classdef FileCoverage < handle
     
     methods (Access = protected)
         function this = countLines(this)
+        % Count the number of lines in a file.
             fid = fopen(this.filename);
             this.numLines = 0;
             if (fid ~= -1)
@@ -103,8 +119,13 @@ classdef FileCoverage < handle
         end
         
         function this = checkForNonCodeLines(this)
-        % Returns a logical array where true is lines without code (empty
-        % or comments).
+        % Returns a logical array where true if the line doesn't contain
+        % executable code.
+        %
+        % Non-executable code is:
+        %   Comments
+        %   end statements
+        %   empty lines
         
             % Nothing to do here and avoid creating a 0x1 matrix.
             if (this.numLines == 0)
@@ -119,7 +140,10 @@ classdef FileCoverage < handle
                     if (fline == -1)
                         return;
                     end
-                    this.nonCodeLines(it) = ~isempty(regexp(fline, '^\s*(%.+)?$', 'ONCE')); % Allowed to be whitespace and / or a comment.
+                    % Strip comments and leading spaces.
+                    command = regexp(fline, this.NON_CODE_EXPRESSION, 'ONCE', 'tokens');
+                    
+                    this.nonCodeLines(it) = ~isempty(regexp(command, this.CODE_EXPRESSION, 'ONCE'));
                     % This should handle block comments.
                 end
                 fclose(fid);
